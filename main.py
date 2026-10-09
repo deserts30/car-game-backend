@@ -1,7 +1,8 @@
 import os
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -46,7 +47,6 @@ if BOT_TOKEN:
 # ==== FastAPI ====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Создаём таблицы в БД при старте
     init_db()
     if BOT_TOKEN:
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
@@ -63,6 +63,36 @@ app.add_middleware(
 )
 
 
+ENERGY_RESTORE_MINUTES = 5
+
+
+def restore_energy(user: User, db: Session):
+    """Восстанавливает энергию по времени: +1 каждые 5 минут."""
+    now = datetime.utcnow()
+
+    if user.last_energy_update is None:
+        user.last_energy_update = now
+        db.commit()
+        return
+
+    if user.energy >= user.max_energy:
+        user.last_energy_update = now
+        db.commit()
+        return
+
+    elapsed = (now - user.last_energy_update).total_seconds()
+    energy_to_add = int(elapsed // (ENERGY_RESTORE_MINUTES * 60))
+
+    if energy_to_add > 0:
+        user.energy = min(user.energy + energy_to_add, user.max_energy)
+        user.last_energy_update = user.last_energy_update + timedelta(
+            minutes=energy_to_add * ENERGY_RESTORE_MINUTES
+        )
+        if user.energy >= user.max_energy:
+            user.last_energy_update = now
+        db.commit()
+
+
 class InitData(BaseModel):
     tg_id: int
     username: str = "player"
@@ -72,6 +102,7 @@ def user_to_dict(u: User):
     return {
         "balance": u.balance,
         "energy": u.energy,
+        "max_energy": u.max_energy,
         "cars": [
             {
                 "id": c.id,
@@ -108,6 +139,9 @@ def auth(data: InitData, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(user)
 
+    restore_energy(user, db)
+    db.refresh(user)
+
     return user_to_dict(user)
 
 
@@ -116,6 +150,9 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
+
+    restore_energy(user, db)
+    db.refresh(user)
 
     if user.energy <= 0:
         raise HTTPException(400, "Нет энергии")
@@ -159,6 +196,9 @@ def garage(tg_id: int, db: Session = Depends(get_db)):
     if not user:
         return {"cars": []}
 
+    restore_energy(user, db)
+    db.refresh(user)
+
     return {
         "cars": [
             {
@@ -175,6 +215,7 @@ def garage(tg_id: int, db: Session = Depends(get_db)):
         ]
     }
 
+
 @app.post("/api/sell/{tg_id}/{car_id}")
 def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
@@ -188,7 +229,6 @@ def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
     if not car:
         raise HTTPException(404, "Car not found")
 
-    # Игрок получает 70% от цены
     sell_price = round(car.price * 0.7, 2)
     user.balance += sell_price
 
