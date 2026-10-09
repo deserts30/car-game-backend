@@ -1,6 +1,5 @@
 import random
 
-# Цвета и их множитель цены
 COLORS = {
     "Чёрный": 1.0,
     "Белый": 1.05,
@@ -12,16 +11,71 @@ COLORS = {
     "Матовый чёрный": 1.5,
 }
 
-# Марка: (множитель, базовая цена)
-BRANDS = {
-    "Lada": (0.3, 10000),
-    "Toyota": (1.0, 30000),
-    "BMW": (1.5, 60000),
-    "Mercedes": (1.6, 65000),
-    "Porsche": (2.5, 150000),
-    "Ferrari": (4.0, 400000),
-    "Lamborghini": (3.5, 350000),
-    "Bugatti": (8.0, 2000000),
+COUNTRIES = {
+    "russia": {
+        "name": "🇷🇺 Россия",
+        "brands": {
+            "Lada": 20000,
+            "GAZ": 25000,
+            "UAZ": 28000,
+            "Moskvich": 15000,
+            "ZIL": 30000,
+            "KAMAZ": 40000,
+        },
+    },
+    "germany": {
+        "name": "🇩🇪 Германия",
+        "brands": {
+            "BMW": 80000,
+            "Mercedes": 85000,
+            "Audi": 75000,
+            "Porsche": 200000,
+            "Volkswagen": 45000,
+            "Opel": 35000,
+        },
+    },
+    "italy": {
+        "name": "🇮🇹 Италия",
+        "brands": {
+            "Ferrari": 500000,
+            "Lamborghini": 450000,
+            "Maserati": 250000,
+            "Alfa Romeo": 90000,
+            "Fiat": 25000,
+        },
+    },
+    "usa": {
+        "name": "🇺🇸 США",
+        "brands": {
+            "Ford": 60000,
+            "Chevrolet": 65000,
+            "Tesla": 150000,
+            "Dodge": 90000,
+            "Cadillac": 120000,
+            "Jeep": 70000,
+        },
+    },
+    "japan": {
+        "name": "🇯🇵 Япония",
+        "brands": {
+            "Toyota": 50000,
+            "Honda": 45000,
+            "Nissan": 48000,
+            "Mazda": 42000,
+            "Subaru": 55000,
+            "Lexus": 110000,
+        },
+    },
+    "dubai": {
+        "name": "🇦🇪 Дубай",
+        "brands": {
+            "Bugatti": 2000000,
+            "Koenigsegg": 1800000,
+            "Rolls-Royce": 800000,
+            "Bentley": 500000,
+            "McLaren": 600000,
+        },
+    },
 }
 
 RARITY_MULT = {
@@ -32,11 +86,10 @@ RARITY_MULT = {
 }
 
 
-def calculate_price(brand, year, color, rarity, condition=100):
-    """Считает итоговую цену машины."""
-    base = BRANDS.get(brand, (1.0, 20000))[1]
+def calculate_price(brand, year, color, rarity, condition=100, country="germany"):
+    country_data = COUNTRIES.get(country, COUNTRIES["germany"])
+    base = country_data["brands"].get(brand, 30000)
 
-    # Год: чем новее, тем дороже. Ретро (>30 лет) тоже ценится
     age = 2025 - year
     year_mult = max(0.4, 1.0 - age * 0.02)
     if age > 30:
@@ -49,19 +102,22 @@ def calculate_price(brand, year, color, rarity, condition=100):
     return round(base * year_mult * color_mult * rarity_mult * cond_mult, 2)
 
 
-def roll_car():
-    """Выбивает случайную машину."""
-    roll = random.random()
-    if roll < 0.55:
-        rarity = "common"
-    elif roll < 0.85:
-        rarity = "rare"
-    elif roll < 0.97:
-        rarity = "epic"
+def roll_car(country="germany", forced_rarity=None):
+    if forced_rarity:
+        rarity = forced_rarity
     else:
-        rarity = "legendary"
+        roll = random.random()
+        if roll < 0.55:
+            rarity = "common"
+        elif roll < 0.85:
+            rarity = "rare"
+        elif roll < 0.97:
+            rarity = "epic"
+        else:
+            rarity = "legendary"
 
-    brand = random.choice(list(BRANDS.keys()))
+    country_data = COUNTRIES.get(country, COUNTRIES["germany"])
+    brand = random.choice(list(country_data["brands"].keys()))
     year = random.randint(1985, 2025)
     color = random.choices(
         list(COLORS.keys()),
@@ -70,7 +126,7 @@ def roll_car():
     )[0]
     condition = random.randint(60, 100)
 
-    price = calculate_price(brand, year, color, rarity, condition)
+    price = calculate_price(brand, year, color, rarity, condition, country)
 
     return {
         "brand": brand,
