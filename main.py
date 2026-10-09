@@ -2,11 +2,14 @@ import os
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from game_logic import roll_car
+from models import init_db, get_db, User, UserCar
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, WebAppInfo
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -43,7 +46,8 @@ if BOT_TOKEN:
 # ==== FastAPI ====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Запускаем бота прямо в loop FastAPI (в главном потоке)
+    # Создаём таблицы в БД при старте
+    init_db()
     if BOT_TOKEN:
         asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     yield
@@ -58,12 +62,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-users = {}
-
 
 class InitData(BaseModel):
     tg_id: int
     username: str = "player"
+
+
+def user_to_dict(u: User):
+    return {
+        "balance": u.balance,
+        "energy": u.energy,
+        "cars": [
+            {
+                "id": c.id,
+                "brand": c.brand,
+                "model": c.model,
+                "year": c.year,
+                "color": c.color,
+                "rarity": c.rarity,
+                "condition": c.condition,
+                "price": c.price,
+            }
+            for c in u.cars
+        ],
+    }
 
 
 @app.get("/")
@@ -71,31 +93,75 @@ def root():
     return {"message": "Car Game API + Bot running"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
 
 
 @app.post("/api/auth")
-def auth(data: InitData):
-    if data.tg_id not in users:
-        users[data.tg_id] = {"balance": 1000, "energy": 10, "cars": []}
-    return users[data.tg_id]
+def auth(data: InitData, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == data.tg_id).first()
+
+    if not user:
+        user = User(tg_id=data.tg_id, username=data.username)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    return user_to_dict(user)
 
 
 @app.post("/api/roll/{tg_id}")
-def do_roll(tg_id: int):
-    if tg_id not in users:
+def do_roll(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
         raise HTTPException(404, "User not found")
-    u = users[tg_id]
-    if u["energy"] <= 0:
+
+    if user.energy <= 0:
         raise HTTPException(400, "Нет энергии")
-    u["energy"] -= 1
-    car = roll_car()
-    u["cars"].append(car)
-    return {"car": car, "energy": u["energy"], "balance": u["balance"]}
+
+    user.energy -= 1
+    car_data = roll_car()
+
+    car = UserCar(
+        user_id=user.id,
+        brand=car_data["brand"],
+        model=car_data["model"],
+        year=car_data["year"],
+        color=car_data["color"],
+        rarity=car_data["rarity"],
+        condition=car_data["condition"],
+        price=car_data["price"],
+    )
+    db.add(car)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "car": car_data,
+        "energy": user.energy,
+        "balance": user.balance,
+    }
 
 
 @app.get("/api/garage/{tg_id}")
-def garage(tg_id: int):
-    return users.get(tg_id, {"cars": []})
+def garage(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        return {"cars": []}
+
+    return {
+        "cars": [
+            {
+                "id": c.id,
+                "brand": c.brand,
+                "model": c.model,
+                "year": c.year,
+                "color": c.color,
+                "rarity": c.rarity,
+                "condition": c.condition,
+                "price": c.price,
+            }
+            for c in user.cars
+        ]
+    }
