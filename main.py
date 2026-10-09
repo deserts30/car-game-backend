@@ -10,8 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from game_logic import (
-    roll_car, roll_modifier, modifier_meta, COUNTRIES,
-    SPECIAL_CARS, MODIFIERS,
+    roll_car, roll_car_from_case, modifier_meta, COUNTRIES, MODIFIERS,
 )
 from models import init_db, get_db, User, UserCar
 
@@ -33,15 +32,12 @@ if BOT_TOKEN:
     async def start(msg: Message):
         kb = InlineKeyboardMarkup(
             inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="🎮 Играть",
-                    web_app=WebAppInfo(url=WEBAPP_URL),
-                )
+                InlineKeyboardButton(text="🎮 Играть", web_app=WebAppInfo(url=WEBAPP_URL))
             ]]
         )
         await msg.answer(
             "🚗 Добро пожаловать в <b>Выбивание машин</b>!\n\n"
-            "Выбивай тачки, собирай коллекцию!",
+            "Крути рулетку, собирай коллекцию!",
             reply_markup=kb,
             parse_mode="HTML",
         )
@@ -56,16 +52,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-ENERGY_RESTORE_MINUTES = 5
+# ============ НАСТРОЙКИ ============
+SPIN_COST = 500_000                 # Цена одной крутки
+SPIN5_COST = 2_500_000              # Цена ×5 круток
+
+BONUS_MONEY = 1_000_000             # Ежедневный бонус
+WHEEL_COOLDOWN_MINUTES = 30         # Колесо удачи
+TICKET_CASE_COST = 5                # Билетов на билетный кейс
 
 XP_BY_RARITY = {
     "common": 10,
@@ -75,50 +71,20 @@ XP_BY_RARITY = {
 }
 
 CONTAINERS = {
-    "common": {
-        "name": "Обычный контейнер",
-        "price": 10000,
-        "weights": {"common": 82, "rare": 15, "epic": 2.7, "legendary": 0.3},
-    },
-    "rare": {
-        "name": "Редкий контейнер",
-        "price": 30000,
-        "weights": {"common": 50, "rare": 38, "epic": 10, "legendary": 2},
-    },
-    "epic": {
-        "name": "Эпический контейнер",
-        "price": 100000,
-        "weights": {"common": 15, "rare": 45, "epic": 35, "legendary": 5},
-    },
-    "legendary": {
-        "name": "Легендарный контейнер",
-        "price": 300000,
-        "weights": {"rare": 25, "epic": 55, "legendary": 20},
-    },
-    "elite": {
-        "name": "Элитный контейнер",
-        "price": 1000000,
-        "weights": {"epic": 35, "legendary": 65},
-    },
+    "common":    {"name": "Обычный контейнер",     "price": 1_000_000},
+    "rare":      {"name": "Редкий контейнер",      "price": 5_000_000},
+    "epic":      {"name": "Эпический контейнер",   "price": 20_000_000},
+    "legendary": {"name": "Легендарный контейнер", "price": 100_000_000},
+    "elite":     {"name": "Элитный контейнер",     "price": 500_000_000},
 }
 
-# Масштаб цены автомобиля внутри кейса
-CASE_BASE_SCALE = {
-    "common": 0.005,
-    "rare": 0.012,
-    "epic": 0.030,
-    "legendary": 0.080,
-    "elite": 0.150,
-}
-
-# Максимальная цена машины из кейса (не даёт сломать экономику)
-CASE_MAX_PRICE = {
-    "common": 200000,
-    "rare": 500000,
-    "epic": 2000000,
-    "legendary": 5000000,
-    "elite": 15000000,
-}
+# Элитный кейс имеет шанс выдать эксклюзив
+ELITE_SPECIAL_CHANCE = 0.01
+SPECIALS = [
+    ("Bugatti", "Cristiano Ronaldo", 10_000_000_000, "legendary", "Юбилейная", "Юбилейная №1"),
+    ("Rolls-Royce", "Sheikh Edition", 3_500_000_000, "legendary", "Золотой", "Эксклюзивная"),
+    ("Ferrari", "LaFerrari Aperta", 2_500_000_000, "legendary", "Красный", "Коллекционная"),
+]
 
 
 def xp_for_next_level(level: int) -> int:
@@ -130,28 +96,6 @@ def add_xp(user: User, amount: int):
     while user.xp >= xp_for_next_level(user.level):
         user.xp -= xp_for_next_level(user.level)
         user.level += 1
-
-
-def restore_energy(user: User, db: Session):
-    now = datetime.utcnow()
-    if user.last_energy_update is None:
-        user.last_energy_update = now
-        db.commit()
-        return
-    if user.energy >= user.max_energy:
-        user.last_energy_update = now
-        db.commit()
-        return
-    elapsed = (now - user.last_energy_update).total_seconds()
-    energy_to_add = int(elapsed // (ENERGY_RESTORE_MINUTES * 60))
-    if energy_to_add > 0:
-        user.energy = min(user.energy + energy_to_add, user.max_energy)
-        user.last_energy_update = user.last_energy_update + timedelta(
-            minutes=energy_to_add * ENERGY_RESTORE_MINUTES
-        )
-        if user.energy >= user.max_energy:
-            user.last_energy_update = now
-        db.commit()
 
 
 class InitData(BaseModel):
@@ -181,8 +125,7 @@ def car_to_dict(c: UserCar):
 def user_to_dict(u: User):
     return {
         "balance": u.balance,
-        "energy": u.energy,
-        "max_energy": u.max_energy,
+        "tickets": u.tickets,
         "level": u.level,
         "xp": u.xp,
         "xp_next": xp_for_next_level(u.level),
@@ -206,14 +149,31 @@ def make_car(user, car_data):
     )
 
 
+# ============ ЭНДПОИНТЫ ============
+
 @app.get("/")
 def root():
-    return {"message": "Car Game API + Bot running"}
+    return {"message": "Car Game API v2"}
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/config")
+def get_config():
+    return {
+        "spin_cost": SPIN_COST,
+        "spin5_cost": SPIN5_COST,
+        "bonus_money": BONUS_MONEY,
+        "wheel_cooldown_minutes": WHEEL_COOLDOWN_MINUTES,
+        "ticket_case_cost": TICKET_CASE_COST,
+        "containers": [
+            {"id": k, "name": v["name"], "price": v["price"]}
+            for k, v in CONTAINERS.items()
+        ],
+    }
 
 
 @app.get("/api/countries")
@@ -224,15 +184,26 @@ def get_countries():
 @app.get("/api/modifiers")
 def get_modifiers():
     return [
-        {
-            "name": m[0],
-            "mult": m[1],
-            "emoji": m[3],
-            "color": m[4],
-            "weight": m[2],
-        }
+        {"name": m[0], "mult": m[1], "emoji": m[3], "color": m[4]}
         for m in MODIFIERS
     ]
+
+
+@app.get("/api/leaderboard")
+def leaderboard(db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    rows = []
+    for u in users:
+        garage_value = sum(c.price for c in u.cars)
+        rows.append({
+            "tg_id": u.tg_id,
+            "username": u.username or "Игрок",
+            "level": u.level,
+            "cars_count": len(u.cars),
+            "garage_value": round(garage_value, 2),
+        })
+    rows.sort(key=lambda x: x["garage_value"], reverse=True)
+    return {"leaders": rows[:50], "total": len(rows)}
 
 
 @app.post("/api/country/{tg_id}")
@@ -259,8 +230,6 @@ def auth(data: InitData, db: Session = Depends(get_db)):
         if data.username and user.username != data.username:
             user.username = data.username
             db.commit()
-    restore_energy(user, db)
-    db.refresh(user)
     return user_to_dict(user)
 
 
@@ -270,13 +239,10 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(404, "User not found")
 
-    restore_energy(user, db)
-    db.refresh(user)
+    if user.balance < SPIN_COST:
+        raise HTTPException(400, f"Нужно {SPIN_COST:,} ₽")
 
-    if user.energy <= 0:
-        raise HTTPException(400, "Нет энергии")
-
-    user.energy -= 1
+    user.balance -= SPIN_COST
     car_data = roll_car(country=user.country)
 
     xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
@@ -291,7 +257,6 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
 
     return {
         "car": car_to_dict(car),
-        "energy": user.energy,
         "balance": user.balance,
         "level": user.level,
         "xp": user.xp,
@@ -306,13 +271,10 @@ def do_roll5(tg_id: int, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(404, "User not found")
 
-    restore_energy(user, db)
-    db.refresh(user)
+    if user.balance < SPIN5_COST:
+        raise HTTPException(400, f"Нужно {SPIN5_COST:,} ₽")
 
-    if user.energy < 5:
-        raise HTTPException(400, "Нужно 5 энергии")
-
-    user.energy -= 5
+    user.balance -= SPIN5_COST
     total_xp = 0
     cars_objs = []
 
@@ -322,7 +284,6 @@ def do_roll5(tg_id: int, db: Session = Depends(get_db)):
         add_xp(user, xp_gained)
         total_xp += xp_gained
         user.total_cars_obtained += 1
-
         car = make_car(user, car_data)
         db.add(car)
         cars_objs.append(car)
@@ -334,7 +295,6 @@ def do_roll5(tg_id: int, db: Session = Depends(get_db)):
 
     return {
         "cars": [car_to_dict(c) for c in cars_objs],
-        "energy": user.energy,
         "balance": user.balance,
         "level": user.level,
         "xp": user.xp,
@@ -348,54 +308,32 @@ def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
-
     if container_type not in CONTAINERS:
         raise HTTPException(400, "Unknown container")
 
     cont = CONTAINERS[container_type]
     if user.balance < cont["price"]:
-        raise HTTPException(400, f"Нужно {cont['price']} ₽")
+        raise HTTPException(400, f"Нужно {cont['price']:,} ₽")
 
     user.balance -= cont["price"]
 
-    # --- 1. Проверка на эксклюзивную именованную машину ---
-    special = None
-    for sc in SPECIAL_CARS:
-        if container_type in sc["only_in"]:
-            if random.random() < sc["chance"]:
-                special = sc
-                break
-
-    if special:
+    # Элитный кейс — шанс на эксклюзив
+    is_special = False
+    if container_type == "elite" and random.random() < ELITE_SPECIAL_CHANCE:
+        special = random.choice(SPECIALS)
         car_data = {
-            "brand": special["brand"],
-            "model": special["model"],
+            "brand": special[0],
+            "model": special[1],
             "year": 2024,
-            "color": special["color"],
-            "rarity": special["rarity"],
-            "modifier": special["modifier"],
+            "color": special[4],
+            "rarity": special[3],
+            "modifier": special[5],
             "condition": 100,
-            "price": special["base_price"],
+            "price": special[2],
         }
+        is_special = True
     else:
-        # --- 2. Обычная машина с модификатором ---
-        rarities = list(cont["weights"].keys())
-        weights = list(cont["weights"].values())
-        rarity = random.choices(rarities, weights=weights, k=1)[0]
-
-        car_data = roll_car(
-            country=user.country,
-            forced_rarity=rarity,
-            apply_modifier=True,
-        )
-
-        # Масштабируем цену под уровень кейса
-        car_data["price"] = round(
-            car_data["price"] * CASE_BASE_SCALE[container_type], 2
-        )
-
-        # Кэп по максимуму для этого кейса
-        car_data["price"] = min(car_data["price"], CASE_MAX_PRICE[container_type])
+        car_data = roll_car_from_case(user.country, cont["price"])
 
     xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
     add_xp(user, xp_gained)
@@ -409,25 +347,171 @@ def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db
 
     return {
         "car": car_to_dict(car),
-        "energy": user.energy,
         "balance": user.balance,
         "level": user.level,
         "xp": user.xp,
         "xp_next": xp_for_next_level(user.level),
         "xp_gained": xp_gained,
-        "is_special": special is not None,
+        "is_special": is_special,
     }
 
+
+# ============ КОЛЕСО УДАЧИ ============
+WHEEL_PRIZES = [
+    ("money", 500_000, 30),
+    ("money", 1_000_000, 25),
+    ("money", 3_000_000, 15),
+    ("money", 10_000_000, 5),
+    ("tickets", 1, 12),
+    ("tickets", 3, 5),
+    ("case", "common", 6),
+    ("case", "rare", 2),
+]
+
+
+def wheel_prize_dict(prize):
+    kind, value, _ = prize
+    if kind == "money":
+        return {"type": "money", "value": value, "label": f"{value:,} ₽", "emoji": "💰"}
+    if kind == "tickets":
+        return {"type": "tickets", "value": value, "label": f"{value} 🎫", "emoji": "🎫"}
+    if kind == "case":
+        return {"type": "case", "value": value, "label": f"{CONTAINERS[value]['name']}", "emoji": "📦"}
+    return {"type": "unknown", "value": 0, "label": "?", "emoji": "❓"}
+
+
+@app.get("/api/wheel/{tg_id}")
+def get_wheel_state(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    now = datetime.utcnow()
+    available = True
+    remaining = 0
+    if user.last_wheel:
+        delta = (now - user.last_wheel).total_seconds()
+        total = WHEEL_COOLDOWN_MINUTES * 60
+        if delta < total:
+            available = False
+            remaining = int(total - delta)
+    return {"available": available, "remaining_seconds": remaining}
+
+
+@app.post("/api/wheel/{tg_id}")
+def spin_wheel(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    now = datetime.utcnow()
+    if user.last_wheel:
+        delta = (now - user.last_wheel).total_seconds()
+        total = WHEEL_COOLDOWN_MINUTES * 60
+        if delta < total:
+            remaining = int(total - delta)
+            m = remaining // 60
+            s = remaining % 60
+            raise HTTPException(400, f"Колесо будет доступно через {m} мин {s} сек")
+
+    weights = [p[2] for p in WHEEL_PRIZES]
+    prize = random.choices(WHEEL_PRIZES, weights=weights, k=1)[0]
+    kind, value, _ = prize
+
+    result_text = ""
+    if kind == "money":
+        user.balance += value
+        result_text = f"+{value:,} ₽"
+    elif kind == "tickets":
+        user.tickets += value
+        result_text = f"+{value} 🎫"
+    elif kind == "case":
+        car_data = roll_car_from_case(user.country, CONTAINERS[value]["price"])
+        car = make_car(user, car_data)
+        db.add(car)
+        result_text = f"Машина: {car_data['brand']}"
+
+    user.last_wheel = now
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "prize": wheel_prize_dict(prize),
+        "result_text": result_text,
+        "balance": user.balance,
+        "tickets": user.tickets,
+    }
+
+
+# ============ БИЛЕТНЫЙ КЕЙС ============
+TICKET_CASE_REWARDS = [
+    ("money", 500_000, 20),
+    ("money", 2_000_000, 15),
+    ("money", 5_000_000, 8),
+    ("tickets", 1, 10),
+    ("xp", 200, 15),
+    ("xp", 1000, 7),
+    ("car", None, 25),
+]
+
+
+@app.post("/api/ticket-case/{tg_id}")
+def open_ticket_case(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    if user.tickets < TICKET_CASE_COST:
+        raise HTTPException(400, f"Нужно {TICKET_CASE_COST} 🎫")
+
+    user.tickets -= TICKET_CASE_COST
+
+    weights = [r[2] for r in TICKET_CASE_REWARDS]
+    reward = random.choices(TICKET_CASE_REWARDS, weights=weights, k=1)[0]
+    kind, value, _ = reward
+
+    result = {}
+    if kind == "money":
+        user.balance += value
+        result = {"type": "money", "value": value, "label": f"+{value:,} ₽"}
+    elif kind == "tickets":
+        user.tickets += value
+        result = {"type": "tickets", "value": value, "label": f"+{value} 🎫"}
+    elif kind == "xp":
+        add_xp(user, value)
+        result = {"type": "xp", "value": value, "label": f"+{value} XP"}
+    elif kind == "car":
+        # Дешёвая машина из билетного кейса
+        car_data = roll_car_from_case(user.country, 2_000_000)
+        car = make_car(user, car_data)
+        db.add(car)
+        user.total_cars_obtained += 1
+        result = {
+            "type": "car",
+            "car": car_to_dict(car) if hasattr(car, 'id') else car_data,
+        }
+        db.flush()
+        result["car"] = car_to_dict(car)
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "reward": result,
+        "balance": user.balance,
+        "tickets": user.tickets,
+        "level": user.level,
+        "xp": user.xp,
+        "xp_next": xp_for_next_level(user.level),
+    }
+
+
+# ============ ГАРАЖ, ПРОДАЖА, БОНУС ============
 
 @app.get("/api/garage/{tg_id}")
 def garage(tg_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         return {"cars": []}
-
-    restore_energy(user, db)
-    db.refresh(user)
-
     return {"cars": [car_to_dict(c) for c in user.cars]}
 
 
@@ -436,21 +520,14 @@ def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
-
-    car = db.query(UserCar).filter(
-        UserCar.id == car_id,
-        UserCar.user_id == user.id
-    ).first()
+    car = db.query(UserCar).filter(UserCar.id == car_id, UserCar.user_id == user.id).first()
     if not car:
         raise HTTPException(404, "Car not found")
-
     sell_price = round(car.price * 0.7, 2)
     user.balance += sell_price
-
     db.delete(car)
     db.commit()
     db.refresh(user)
-
     return {"sold_price": sell_price, "new_balance": user.balance}
 
 
@@ -459,26 +536,17 @@ def sell_all(tg_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
-
     cars = db.query(UserCar).filter(UserCar.user_id == user.id).all()
     if not cars:
         raise HTTPException(400, "Гараж пуст")
-
     total = round(sum(c.price * 0.7 for c in cars), 2)
     count = len(cars)
-
     for c in cars:
         db.delete(c)
-
     user.balance += total
     db.commit()
     db.refresh(user)
-
-    return {
-        "sold_count": count,
-        "sold_total": total,
-        "new_balance": user.balance,
-    }
+    return {"sold_count": count, "sold_total": total, "new_balance": user.balance}
 
 
 @app.post("/api/bonus/{tg_id}")
@@ -486,28 +554,21 @@ def claim_bonus(tg_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
-
     now = datetime.utcnow()
     if user.last_bonus:
         delta = now - user.last_bonus
         if delta.total_seconds() < 24 * 3600:
             remaining = 24 * 3600 - delta.total_seconds()
-            hours = int(remaining // 3600)
-            minutes = int((remaining % 3600) // 60)
-            raise HTTPException(400, f"Бонус будет доступен через {hours} ч {minutes} мин")
+            h = int(remaining // 3600)
+            m = int((remaining % 3600) // 60)
+            raise HTTPException(400, f"Бонус доступен через {h} ч {m} мин")
 
-    bonus_money = 500
-    bonus_energy = 5
-
-    user.balance += bonus_money
-    user.energy = min(user.energy + bonus_energy, user.max_energy)
+    user.balance += BONUS_MONEY
     user.last_bonus = now
     db.commit()
     db.refresh(user)
 
     return {
-        "bonus_money": bonus_money,
-        "bonus_energy": bonus_energy,
+        "bonus_money": BONUS_MONEY,
         "new_balance": user.balance,
-        "new_energy": user.energy,
     }
