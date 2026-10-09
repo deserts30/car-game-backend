@@ -15,7 +15,6 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, WebAppInfo
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ==== Telegram Bot ====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://deserts30.github.io/-rdrop/")
 
@@ -44,7 +43,6 @@ if BOT_TOKEN:
         )
 
 
-# ==== FastAPI ====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -65,9 +63,26 @@ app.add_middleware(
 
 ENERGY_RESTORE_MINUTES = 5
 
+XP_BY_RARITY = {
+    "common": 10,
+    "rare": 25,
+    "epic": 60,
+    "legendary": 150,
+}
+
+
+def xp_for_next_level(level: int) -> int:
+    return 100 * level * level
+
+
+def add_xp(user: User, amount: int):
+    user.xp += amount
+    while user.xp >= xp_for_next_level(user.level):
+        user.xp -= xp_for_next_level(user.level)
+        user.level += 1
+
 
 def restore_energy(user: User, db: Session):
-    """Восстанавливает энергию по времени: +1 каждые 5 минут."""
     now = datetime.utcnow()
 
     if user.last_energy_update is None:
@@ -103,6 +118,10 @@ def user_to_dict(u: User):
         "balance": u.balance,
         "energy": u.energy,
         "max_energy": u.max_energy,
+        "level": u.level,
+        "xp": u.xp,
+        "xp_next": xp_for_next_level(u.level),
+        "total_cars_obtained": u.total_cars_obtained,
         "cars": [
             {
                 "id": c.id,
@@ -160,6 +179,10 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     user.energy -= 1
     car_data = roll_car()
 
+    xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
+    add_xp(user, xp_gained)
+    user.total_cars_obtained += 1
+
     car = UserCar(
         user_id=user.id,
         brand=car_data["brand"],
@@ -187,6 +210,10 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
         },
         "energy": user.energy,
         "balance": user.balance,
+        "level": user.level,
+        "xp": user.xp,
+        "xp_next": xp_for_next_level(user.level),
+        "xp_gained": xp_gained,
     }
 
 
