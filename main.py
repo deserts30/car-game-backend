@@ -1,6 +1,5 @@
 import os
 import asyncio
-import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -41,16 +40,12 @@ if BOT_TOKEN:
         )
 
 
-def run_bot():
-    asyncio.run(dp.start_polling(bot))
-
-
 # ==== FastAPI ====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Запускаем бота прямо в loop FastAPI (в главном потоке)
     if BOT_TOKEN:
-        thread = threading.Thread(target=run_bot, daemon=True)
-        thread.start()
+        asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     yield
 
 
