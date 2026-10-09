@@ -9,6 +9,9 @@ COLORS = {
     "Жёлтый": 1.3,
     "Хамелеон": 1.8,
     "Матовый чёрный": 1.5,
+    "Розовый": 1.6,
+    "Золотой": 2.2,
+    "Радужный": 2.8,
 }
 
 COUNTRIES = {
@@ -74,6 +77,7 @@ COUNTRIES = {
             "Rolls-Royce": 800000,
             "Bentley": 500000,
             "McLaren": 600000,
+            "Maybach": 400000,
         },
     },
 }
@@ -84,6 +88,73 @@ RARITY_MULT = {
     "epic": 2.5,
     "legendary": 5.0,
 }
+
+# ==== МОДИФИКАТОРЫ СОСТОЯНИЯ ====
+# (название, множитель цены, вес, эмодзи, цвет)
+MODIFIERS = [
+    ("Ржавая",         0.35, 15.0, "🦠", "#8B4513"),
+    ("Мятая",          0.50, 15.0, "💥", "#B22222"),
+    ("Царапанная",     0.65, 15.0, "⚡", "#A0522D"),
+    ("Грязная",        0.75, 15.0, "💩", "#6B4423"),
+    ("Граффити",       0.70, 10.0, "🎨", "#FF69B4"),
+    ("Обычная",        1.00, 20.0, "🚗", "#94a3b8"),
+    ("Ухоженная",      1.15,  5.0, "✨", "#22c55e"),
+    ("Эксклюзивная",   1.40,  2.0, "🌟", "#a855f7"),
+    ("Юбилейная №1",   2.00,  1.0, "🏆", "#fbbf24"),
+    ("Коллекционная",  3.00,  0.5, "💎", "#22d3ee"),
+]
+
+# ==== ЭКСКЛЮЗИВНЫЕ ИМЕНОВАННЫЕ МАШИНЫ ====
+SPECIAL_CARS = [
+    {
+        "brand": "Bugatti",
+        "model": "Cristiano Ronaldo",
+        "base_price": 10000000,
+        "rarity": "legendary",
+        "color": "Юбилейная",
+        "modifier": "Юбилейная №1",
+        "only_in": ["elite"],
+        "chance": 0.003,   # 0.3% в элитном кейсе
+    },
+    {
+        "brand": "Rolls-Royce",
+        "model": "Sheikh Edition",
+        "base_price": 3500000,
+        "rarity": "legendary",
+        "color": "Золотой",
+        "modifier": "Эксклюзивная",
+        "only_in": ["legendary", "elite"],
+        "chance": 0.008,
+    },
+    {
+        "brand": "Ferrari",
+        "model": "LaFerrari Aperta",
+        "base_price": 2500000,
+        "rarity": "legendary",
+        "color": "Красный",
+        "modifier": "Коллекционная",
+        "only_in": ["epic", "legendary", "elite"],
+        "chance": 0.006,
+    },
+]
+
+
+def roll_modifier():
+    weights = [m[2] for m in MODIFIERS]
+    mod = random.choices(MODIFIERS, weights=weights, k=1)[0]
+    return {
+        "name": mod[0],
+        "price_mult": mod[1],
+        "emoji": mod[3],
+        "color": mod[4],
+    }
+
+
+def modifier_meta(name):
+    for m in MODIFIERS:
+        if m[0] == name:
+            return {"name": m[0], "price_mult": m[1], "emoji": m[3], "color": m[4]}
+    return {"name": "Обычная", "price_mult": 1.0, "emoji": "🚗", "color": "#94a3b8"}
 
 
 def calculate_price(brand, year, color, rarity, condition=100, country="germany"):
@@ -102,7 +173,7 @@ def calculate_price(brand, year, color, rarity, condition=100, country="germany"
     return round(base * year_mult * color_mult * rarity_mult * cond_mult, 2)
 
 
-def roll_car(country="germany", forced_rarity=None):
+def roll_car(country="germany", forced_rarity=None, apply_modifier=True):
     if forced_rarity:
         rarity = forced_rarity
     else:
@@ -121,14 +192,14 @@ def roll_car(country="germany", forced_rarity=None):
     year = random.randint(1985, 2025)
     color = random.choices(
         list(COLORS.keys()),
-        weights=[15, 12, 12, 10, 10, 5, 2, 3],
+        weights=[15, 12, 12, 10, 10, 5, 2, 3, 2, 1, 0.5],
         k=1
     )[0]
     condition = random.randint(60, 100)
 
     price = calculate_price(brand, year, color, rarity, condition, country)
 
-    return {
+    result = {
         "brand": brand,
         "model": "",
         "year": year,
@@ -137,3 +208,12 @@ def roll_car(country="germany", forced_rarity=None):
         "condition": condition,
         "price": price,
     }
+
+    if apply_modifier:
+        mod = roll_modifier()
+        result["modifier"] = mod["name"]
+        result["price"] = round(result["price"] * mod["price_mult"], 2)
+    else:
+        result["modifier"] = "Обычная"
+
+    return result
