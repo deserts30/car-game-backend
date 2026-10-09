@@ -31,6 +31,7 @@ class User(Base):
     level = Column(Integer, default=1)
     xp = Column(Integer, default=0)
     total_cars_obtained = Column(Integer, default=0)
+    country = Column(String, default="germany")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cars = relationship("UserCar", back_populates="user", cascade="all, delete-orphan")
