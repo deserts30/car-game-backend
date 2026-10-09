@@ -165,3 +165,29 @@ def garage(tg_id: int, db: Session = Depends(get_db)):
             for c in user.cars
         ]
     }
+
+@app.post("/api/sell/{tg_id}/{car_id}")
+def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    car = db.query(UserCar).filter(
+        UserCar.id == car_id,
+        UserCar.user_id == user.id
+    ).first()
+    if not car:
+        raise HTTPException(404, "Car not found")
+
+    # Игрок получает 70% от цены
+    sell_price = round(car.price * 0.7, 2)
+    user.balance += sell_price
+
+    db.delete(car)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "sold_price": sell_price,
+        "new_balance": user.balance,
+    }
