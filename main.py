@@ -137,8 +137,17 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    return {
-        "car": car_data,
+       return {
+        "car": {
+            "id": car.id,
+            "brand": car.brand,
+            "model": car.model,
+            "year": car.year,
+            "color": car.color,
+            "rarity": car.rarity,
+            "condition": car.condition,
+            "price": car.price,
+        },
         "energy": user.energy,
         "balance": user.balance,
     }
