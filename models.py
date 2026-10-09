@@ -47,6 +47,7 @@ class UserCar(Base):
     year = Column(Integer, nullable=False)
     color = Column(String, nullable=False)
     rarity = Column(String, nullable=False)
+    modifier = Column(String, default="Обычная")
     condition = Column(Integer, default=100)
     price = Column(Float, nullable=False)
     obtained_at = Column(DateTime, default=datetime.utcnow)
