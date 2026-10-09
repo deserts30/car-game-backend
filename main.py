@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from game_logic import roll_car, COUNTRIES
+from game_logic import (
+    roll_car, roll_modifier, modifier_meta, COUNTRIES,
+    SPECIAL_CARS, MODIFIERS,
+)
 from models import init_db, get_db, User, UserCar
 
 from aiogram import Bot, Dispatcher, F
@@ -71,10 +74,6 @@ XP_BY_RARITY = {
     "legendary": 150,
 }
 
-# Множитель цены машины, полученной из контейнера.
-# 0.35 = машина стоит 35% от обычной цены → игрок в среднем в минусе
-CONTAINER_PRICE_MULT = 0.35
-
 CONTAINERS = {
     "common": {
         "name": "Обычный контейнер",
@@ -101,6 +100,24 @@ CONTAINERS = {
         "price": 1000000,
         "weights": {"epic": 35, "legendary": 65},
     },
+}
+
+# Масштаб цены автомобиля внутри кейса
+CASE_BASE_SCALE = {
+    "common": 0.005,
+    "rare": 0.012,
+    "epic": 0.030,
+    "legendary": 0.080,
+    "elite": 0.150,
+}
+
+# Максимальная цена машины из кейса (не даёт сломать экономику)
+CASE_MAX_PRICE = {
+    "common": 200000,
+    "rare": 500000,
+    "epic": 2000000,
+    "legendary": 5000000,
+    "elite": 15000000,
 }
 
 
@@ -146,6 +163,21 @@ class CountryData(BaseModel):
     country: str
 
 
+def car_to_dict(c: UserCar):
+    return {
+        "id": c.id,
+        "brand": c.brand,
+        "model": c.model,
+        "year": c.year,
+        "color": c.color,
+        "rarity": c.rarity,
+        "modifier": c.modifier or "Обычная",
+        "modifier_meta": modifier_meta(c.modifier or "Обычная"),
+        "condition": c.condition,
+        "price": c.price,
+    }
+
+
 def user_to_dict(u: User):
     return {
         "balance": u.balance,
@@ -156,33 +188,22 @@ def user_to_dict(u: User):
         "xp_next": xp_for_next_level(u.level),
         "total_cars_obtained": u.total_cars_obtained,
         "country": u.country,
-        "cars": [
-            {
-                "id": c.id,
-                "brand": c.brand,
-                "model": c.model,
-                "year": c.year,
-                "color": c.color,
-                "rarity": c.rarity,
-                "condition": c.condition,
-                "price": c.price,
-            }
-            for c in u.cars
-        ],
+        "cars": [car_to_dict(c) for c in u.cars],
     }
 
 
-def car_to_dict(c: UserCar):
-    return {
-        "id": c.id,
-        "brand": c.brand,
-        "model": c.model,
-        "year": c.year,
-        "color": c.color,
-        "rarity": c.rarity,
-        "condition": c.condition,
-        "price": c.price,
-    }
+def make_car(user, car_data):
+    return UserCar(
+        user_id=user.id,
+        brand=car_data["brand"],
+        model=car_data.get("model", ""),
+        year=car_data["year"],
+        color=car_data["color"],
+        rarity=car_data["rarity"],
+        modifier=car_data.get("modifier", "Обычная"),
+        condition=car_data.get("condition", 100),
+        price=car_data["price"],
+    )
 
 
 @app.get("/")
@@ -198,6 +219,20 @@ def health():
 @app.get("/api/countries")
 def get_countries():
     return {k: v["name"] for k, v in COUNTRIES.items()}
+
+
+@app.get("/api/modifiers")
+def get_modifiers():
+    return [
+        {
+            "name": m[0],
+            "mult": m[1],
+            "emoji": m[3],
+            "color": m[4],
+            "weight": m[2],
+        }
+        for m in MODIFIERS
+    ]
 
 
 @app.post("/api/country/{tg_id}")
@@ -248,16 +283,7 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     add_xp(user, xp_gained)
     user.total_cars_obtained += 1
 
-    car = UserCar(
-        user_id=user.id,
-        brand=car_data["brand"],
-        model=car_data["model"],
-        year=car_data["year"],
-        color=car_data["color"],
-        rarity=car_data["rarity"],
-        condition=car_data["condition"],
-        price=car_data["price"],
-    )
+    car = make_car(user, car_data)
     db.add(car)
     db.commit()
     db.refresh(user)
@@ -297,16 +323,7 @@ def do_roll5(tg_id: int, db: Session = Depends(get_db)):
         total_xp += xp_gained
         user.total_cars_obtained += 1
 
-        car = UserCar(
-            user_id=user.id,
-            brand=car_data["brand"],
-            model=car_data["model"],
-            year=car_data["year"],
-            color=car_data["color"],
-            rarity=car_data["rarity"],
-            condition=car_data["condition"],
-            price=car_data["price"],
-        )
+        car = make_car(user, car_data)
         db.add(car)
         cars_objs.append(car)
 
@@ -341,27 +358,50 @@ def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db
 
     user.balance -= cont["price"]
 
-    rarities = list(cont["weights"].keys())
-    weights = list(cont["weights"].values())
-    rarity = random.choices(rarities, weights=weights, k=1)[0]
+    # --- 1. Проверка на эксклюзивную именованную машину ---
+    special = None
+    for sc in SPECIAL_CARS:
+        if container_type in sc["only_in"]:
+            if random.random() < sc["chance"]:
+                special = sc
+                break
 
-    car_data = roll_car(country=user.country, forced_rarity=rarity)
-    car_data["price"] = round(car_data["price"] * CONTAINER_PRICE_MULT, 2)
+    if special:
+        car_data = {
+            "brand": special["brand"],
+            "model": special["model"],
+            "year": 2024,
+            "color": special["color"],
+            "rarity": special["rarity"],
+            "modifier": special["modifier"],
+            "condition": 100,
+            "price": special["base_price"],
+        }
+    else:
+        # --- 2. Обычная машина с модификатором ---
+        rarities = list(cont["weights"].keys())
+        weights = list(cont["weights"].values())
+        rarity = random.choices(rarities, weights=weights, k=1)[0]
 
-    xp_gained = XP_BY_RARITY.get(rarity, 10)
+        car_data = roll_car(
+            country=user.country,
+            forced_rarity=rarity,
+            apply_modifier=True,
+        )
+
+        # Масштабируем цену под уровень кейса
+        car_data["price"] = round(
+            car_data["price"] * CASE_BASE_SCALE[container_type], 2
+        )
+
+        # Кэп по максимуму для этого кейса
+        car_data["price"] = min(car_data["price"], CASE_MAX_PRICE[container_type])
+
+    xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
     add_xp(user, xp_gained)
     user.total_cars_obtained += 1
 
-    car = UserCar(
-        user_id=user.id,
-        brand=car_data["brand"],
-        model=car_data["model"],
-        year=car_data["year"],
-        color=car_data["color"],
-        rarity=car_data["rarity"],
-        condition=car_data["condition"],
-        price=car_data["price"],
-    )
+    car = make_car(user, car_data)
     db.add(car)
     db.commit()
     db.refresh(user)
@@ -375,6 +415,7 @@ def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db
         "xp": user.xp,
         "xp_next": xp_for_next_level(user.level),
         "xp_gained": xp_gained,
+        "is_special": special is not None,
     }
 
 
