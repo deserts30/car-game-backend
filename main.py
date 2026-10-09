@@ -71,36 +71,35 @@ XP_BY_RARITY = {
     "legendary": 150,
 }
 
+# Множитель цены машины, полученной из контейнера.
+# 0.35 = машина стоит 35% от обычной цены → игрок в среднем в минусе
+CONTAINER_PRICE_MULT = 0.35
+
 CONTAINERS = {
     "common": {
         "name": "Обычный контейнер",
         "price": 10000,
-        "weights": {"common": 70, "rare": 25, "epic": 4.5, "legendary": 0.5},
-        "price_mult": 1.0,
+        "weights": {"common": 82, "rare": 15, "epic": 2.7, "legendary": 0.3},
     },
     "rare": {
         "name": "Редкий контейнер",
         "price": 30000,
-        "weights": {"common": 30, "rare": 45, "epic": 20, "legendary": 5},
-        "price_mult": 1.0,
+        "weights": {"common": 50, "rare": 38, "epic": 10, "legendary": 2},
     },
     "epic": {
         "name": "Эпический контейнер",
         "price": 100000,
-        "weights": {"rare": 30, "epic": 50, "legendary": 20},
-        "price_mult": 1.0,
+        "weights": {"common": 15, "rare": 45, "epic": 35, "legendary": 5},
     },
     "legendary": {
         "name": "Легендарный контейнер",
         "price": 300000,
-        "weights": {"epic": 30, "legendary": 70},
-        "price_mult": 1.0,
+        "weights": {"rare": 25, "epic": 55, "legendary": 20},
     },
     "elite": {
         "name": "Элитный контейнер",
         "price": 1000000,
-        "weights": {"epic": 10, "legendary": 90},
-        "price_mult": 1.5,
+        "weights": {"epic": 35, "legendary": 65},
     },
 }
 
@@ -221,6 +220,10 @@ def auth(data: InitData, db: Session = Depends(get_db)):
         db.add(user)
         db.commit()
         db.refresh(user)
+    else:
+        if data.username and user.username != data.username:
+            user.username = data.username
+            db.commit()
     restore_energy(user, db)
     db.refresh(user)
     return user_to_dict(user)
@@ -343,9 +346,7 @@ def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db
     rarity = random.choices(rarities, weights=weights, k=1)[0]
 
     car_data = roll_car(country=user.country, forced_rarity=rarity)
-
-    if cont["price_mult"] != 1.0:
-        car_data["price"] = round(car_data["price"] * cont["price_mult"], 2)
+    car_data["price"] = round(car_data["price"] * CONTAINER_PRICE_MULT, 2)
 
     xp_gained = XP_BY_RARITY.get(rarity, 10)
     add_xp(user, xp_gained)
