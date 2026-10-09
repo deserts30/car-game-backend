@@ -8,7 +8,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -23,15 +22,14 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     tg_id = Column(BigInteger, unique=True, index=True, nullable=False)
     username = Column(String, default="player")
-    balance = Column(Float, default=1000)
-    energy = Column(Integer, default=10)
-    max_energy = Column(Integer, default=10)
-    last_energy_update = Column(DateTime, default=datetime.utcnow)
-    last_bonus = Column(DateTime, nullable=True)
+    balance = Column(Float, default=10_000_000)
+    tickets = Column(Integer, default=0)
     level = Column(Integer, default=1)
     xp = Column(Integer, default=0)
     total_cars_obtained = Column(Integer, default=0)
     country = Column(String, default="germany")
+    last_bonus = Column(DateTime, nullable=True)
+    last_wheel = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cars = relationship("UserCar", back_populates="user", cascade="all, delete-orphan")
