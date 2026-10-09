@@ -9,7 +9,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Render/Heroku отдают postgres://, SQLAlchemy требует postgresql://
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -29,6 +28,9 @@ class User(Base):
     max_energy = Column(Integer, default=10)
     last_energy_update = Column(DateTime, default=datetime.utcnow)
     last_bonus = Column(DateTime, nullable=True)
+    level = Column(Integer, default=1)
+    xp = Column(Integer, default=0)
+    total_cars_obtained = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cars = relationship("UserCar", back_populates="user", cascade="all, delete-orphan")
@@ -52,12 +54,10 @@ class UserCar(Base):
 
 
 def init_db():
-    """Создаёт таблицы в базе, если их ещё нет."""
     Base.metadata.create_all(bind=engine)
 
 
 def get_db():
-    """Возвращает сессию для работы с БД (используется в FastAPI через Depends)."""
     db = SessionLocal()
     try:
         yield db
