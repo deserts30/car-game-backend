@@ -12,72 +12,74 @@ COLORS = {
     "Розовый": 1.6,
     "Золотой": 2.2,
     "Радужный": 2.8,
+    "Юбилейная": 3.0,
 }
 
+# Реалистичные цены в рублях
 COUNTRIES = {
     "russia": {
         "name": "🇷🇺 Россия",
         "brands": {
-            "Lada": 20000,
-            "GAZ": 25000,
-            "UAZ": 28000,
-            "Moskvich": 15000,
-            "ZIL": 30000,
-            "KAMAZ": 40000,
+            "Lada": 500_000,
+            "GAZ": 450_000,
+            "UAZ": 700_000,
+            "Moskvich": 350_000,
+            "ZIL": 900_000,
+            "KAMAZ": 1_500_000,
         },
     },
     "germany": {
         "name": "🇩🇪 Германия",
         "brands": {
-            "BMW": 80000,
-            "Mercedes": 85000,
-            "Audi": 75000,
-            "Porsche": 200000,
-            "Volkswagen": 45000,
-            "Opel": 35000,
+            "BMW": 5_000_000,
+            "Mercedes": 6_000_000,
+            "Audi": 4_500_000,
+            "Porsche": 15_000_000,
+            "Volkswagen": 2_500_000,
+            "Opel": 1_800_000,
         },
     },
     "italy": {
         "name": "🇮🇹 Италия",
         "brands": {
-            "Ferrari": 500000,
-            "Lamborghini": 450000,
-            "Maserati": 250000,
-            "Alfa Romeo": 90000,
-            "Fiat": 25000,
+            "Ferrari": 35_000_000,
+            "Lamborghini": 30_000_000,
+            "Maserati": 15_000_000,
+            "Alfa Romeo": 4_000_000,
+            "Fiat": 1_200_000,
         },
     },
     "usa": {
         "name": "🇺🇸 США",
         "brands": {
-            "Ford": 60000,
-            "Chevrolet": 65000,
-            "Tesla": 150000,
-            "Dodge": 90000,
-            "Cadillac": 120000,
-            "Jeep": 70000,
+            "Ford": 3_000_000,
+            "Chevrolet": 3_500_000,
+            "Tesla": 8_000_000,
+            "Dodge": 5_000_000,
+            "Cadillac": 7_000_000,
+            "Jeep": 4_500_000,
         },
     },
     "japan": {
         "name": "🇯🇵 Япония",
         "brands": {
-            "Toyota": 50000,
-            "Honda": 45000,
-            "Nissan": 48000,
-            "Mazda": 42000,
-            "Subaru": 55000,
-            "Lexus": 110000,
+            "Toyota": 3_000_000,
+            "Honda": 2_800_000,
+            "Nissan": 2_500_000,
+            "Mazda": 2_200_000,
+            "Subaru": 3_200_000,
+            "Lexus": 7_500_000,
         },
     },
     "dubai": {
         "name": "🇦🇪 Дубай",
         "brands": {
-            "Bugatti": 2000000,
-            "Koenigsegg": 1800000,
-            "Rolls-Royce": 800000,
-            "Bentley": 500000,
-            "McLaren": 600000,
-            "Maybach": 400000,
+            "Bugatti": 200_000_000,
+            "Koenigsegg": 180_000_000,
+            "Rolls-Royce": 80_000_000,
+            "Bentley": 50_000_000,
+            "McLaren": 60_000_000,
+            "Maybach": 40_000_000,
         },
     },
 }
@@ -89,8 +91,6 @@ RARITY_MULT = {
     "legendary": 5.0,
 }
 
-# ==== МОДИФИКАТОРЫ СОСТОЯНИЯ ====
-# (название, множитель цены, вес, эмодзи, цвет)
 MODIFIERS = [
     ("Ржавая",         0.35, 15.0, "🦠", "#8B4513"),
     ("Мятая",          0.50, 15.0, "💥", "#B22222"),
@@ -102,40 +102,6 @@ MODIFIERS = [
     ("Эксклюзивная",   1.40,  2.0, "🌟", "#a855f7"),
     ("Юбилейная №1",   2.00,  1.0, "🏆", "#fbbf24"),
     ("Коллекционная",  3.00,  0.5, "💎", "#22d3ee"),
-]
-
-# ==== ЭКСКЛЮЗИВНЫЕ ИМЕНОВАННЫЕ МАШИНЫ ====
-SPECIAL_CARS = [
-    {
-        "brand": "Bugatti",
-        "model": "Cristiano Ronaldo",
-        "base_price": 10000000,
-        "rarity": "legendary",
-        "color": "Юбилейная",
-        "modifier": "Юбилейная №1",
-        "only_in": ["elite"],
-        "chance": 0.003,   # 0.3% в элитном кейсе
-    },
-    {
-        "brand": "Rolls-Royce",
-        "model": "Sheikh Edition",
-        "base_price": 3500000,
-        "rarity": "legendary",
-        "color": "Золотой",
-        "modifier": "Эксклюзивная",
-        "only_in": ["legendary", "elite"],
-        "chance": 0.008,
-    },
-    {
-        "brand": "Ferrari",
-        "model": "LaFerrari Aperta",
-        "base_price": 2500000,
-        "rarity": "legendary",
-        "color": "Красный",
-        "modifier": "Коллекционная",
-        "only_in": ["epic", "legendary", "elite"],
-        "chance": 0.006,
-    },
 ]
 
 
@@ -159,7 +125,7 @@ def modifier_meta(name):
 
 def calculate_price(brand, year, color, rarity, condition=100, country="germany"):
     country_data = COUNTRIES.get(country, COUNTRIES["germany"])
-    base = country_data["brands"].get(brand, 30000)
+    base = country_data["brands"].get(brand, 3_000_000)
 
     age = 2025 - year
     year_mult = max(0.4, 1.0 - age * 0.02)
@@ -192,7 +158,7 @@ def roll_car(country="germany", forced_rarity=None, apply_modifier=True):
     year = random.randint(1985, 2025)
     color = random.choices(
         list(COLORS.keys()),
-        weights=[15, 12, 12, 10, 10, 5, 2, 3, 2, 1, 0.5],
+        weights=[15, 12, 12, 10, 10, 5, 2, 3, 2, 1, 0.5, 0.3],
         k=1
     )[0]
     condition = random.randint(60, 100)
@@ -217,3 +183,49 @@ def roll_car(country="germany", forced_rarity=None, apply_modifier=True):
         result["modifier"] = "Обычная"
 
     return result
+
+
+def roll_car_from_case(country, case_price):
+    """Возвращает машину из кейса. Цена = case_price * (0.5..1.6) * modifier."""
+    country_data = COUNTRIES.get(country, COUNTRIES["germany"])
+    brand = random.choice(list(country_data["brands"].keys()))
+    year = random.randint(1985, 2025)
+
+    # Определяем редкость по цене бренда относительно прайса кейса
+    brand_base = country_data["brands"][brand]
+    if brand_base >= case_price * 5:
+        rarity = "legendary"
+    elif brand_base >= case_price * 1.5:
+        rarity = "epic"
+    elif brand_base >= case_price * 0.4:
+        rarity = "rare"
+    else:
+        rarity = "common"
+
+    color = random.choices(
+        list(COLORS.keys()),
+        weights=[15, 12, 12, 10, 10, 5, 2, 3, 2, 1, 0.5, 0.3],
+        k=1
+    )[0]
+    condition = random.randint(60, 100)
+
+    # Базовая цена = цена кейса × случайный множитель
+    base = case_price * random.uniform(0.5, 1.6)
+
+    # Модификатор
+    mod = roll_modifier()
+    price = round(base * mod["price_mult"], 2)
+
+    # Простая модель/название
+    model = ""
+
+    return {
+        "brand": brand,
+        "model": model,
+        "year": year,
+        "color": color,
+        "rarity": rarity,
+        "condition": condition,
+        "modifier": mod["name"],
+        "price": price,
+    }
