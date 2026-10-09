@@ -1,7 +1,7 @@
 import os
 import asyncio
 from contextlib import asynccontextmanager
-
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -199,4 +199,39 @@ def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
     return {
         "sold_price": sell_price,
         "new_balance": user.balance,
+    }
+
+
+@app.post("/api/bonus/{tg_id}")
+def claim_bonus(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    now = datetime.utcnow()
+    if user.last_bonus:
+        delta = now - user.last_bonus
+        if delta.total_seconds() < 24 * 3600:
+            remaining = 24 * 3600 - delta.total_seconds()
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            raise HTTPException(
+                400,
+                f"Бонус будет доступен через {hours} ч {minutes} мин"
+            )
+
+    bonus_money = 500
+    bonus_energy = 5
+
+    user.balance += bonus_money
+    user.energy = min(user.energy + bonus_energy, user.max_energy)
+    user.last_bonus = now
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "bonus_money": bonus_money,
+        "bonus_energy": bonus_energy,
+        "new_balance": user.balance,
+        "new_energy": user.energy,
     }
