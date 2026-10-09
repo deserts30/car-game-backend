@@ -1,5 +1,6 @@
 import os
 import asyncio
+import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -8,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from game_logic import roll_car
+from game_logic import roll_car, COUNTRIES
 from models import init_db, get_db, User, UserCar
 
 from aiogram import Bot, Dispatcher, F
@@ -70,6 +71,39 @@ XP_BY_RARITY = {
     "legendary": 150,
 }
 
+CONTAINERS = {
+    "common": {
+        "name": "Обычный контейнер",
+        "price": 10000,
+        "weights": {"common": 70, "rare": 25, "epic": 4.5, "legendary": 0.5},
+        "price_mult": 1.0,
+    },
+    "rare": {
+        "name": "Редкий контейнер",
+        "price": 30000,
+        "weights": {"common": 30, "rare": 45, "epic": 20, "legendary": 5},
+        "price_mult": 1.0,
+    },
+    "epic": {
+        "name": "Эпический контейнер",
+        "price": 100000,
+        "weights": {"rare": 30, "epic": 50, "legendary": 20},
+        "price_mult": 1.0,
+    },
+    "legendary": {
+        "name": "Легендарный контейнер",
+        "price": 300000,
+        "weights": {"epic": 30, "legendary": 70},
+        "price_mult": 1.0,
+    },
+    "elite": {
+        "name": "Элитный контейнер",
+        "price": 1000000,
+        "weights": {"epic": 10, "legendary": 90},
+        "price_mult": 1.5,
+    },
+}
+
 
 def xp_for_next_level(level: int) -> int:
     return 100 * level * level
@@ -84,20 +118,16 @@ def add_xp(user: User, amount: int):
 
 def restore_energy(user: User, db: Session):
     now = datetime.utcnow()
-
     if user.last_energy_update is None:
         user.last_energy_update = now
         db.commit()
         return
-
     if user.energy >= user.max_energy:
         user.last_energy_update = now
         db.commit()
         return
-
     elapsed = (now - user.last_energy_update).total_seconds()
     energy_to_add = int(elapsed // (ENERGY_RESTORE_MINUTES * 60))
-
     if energy_to_add > 0:
         user.energy = min(user.energy + energy_to_add, user.max_energy)
         user.last_energy_update = user.last_energy_update + timedelta(
@@ -113,6 +143,10 @@ class InitData(BaseModel):
     username: str = "player"
 
 
+class CountryData(BaseModel):
+    country: str
+
+
 def user_to_dict(u: User):
     return {
         "balance": u.balance,
@@ -122,6 +156,7 @@ def user_to_dict(u: User):
         "xp": u.xp,
         "xp_next": xp_for_next_level(u.level),
         "total_cars_obtained": u.total_cars_obtained,
+        "country": u.country,
         "cars": [
             {
                 "id": c.id,
@@ -138,6 +173,19 @@ def user_to_dict(u: User):
     }
 
 
+def car_to_dict(c: UserCar):
+    return {
+        "id": c.id,
+        "brand": c.brand,
+        "model": c.model,
+        "year": c.year,
+        "color": c.color,
+        "rarity": c.rarity,
+        "condition": c.condition,
+        "price": c.price,
+    }
+
+
 @app.get("/")
 def root():
     return {"message": "Car Game API + Bot running"}
@@ -148,19 +196,33 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/countries")
+def get_countries():
+    return {k: v["name"] for k, v in COUNTRIES.items()}
+
+
+@app.post("/api/country/{tg_id}")
+def set_country(tg_id: int, data: CountryData, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if data.country not in COUNTRIES:
+        raise HTTPException(400, "Unknown country")
+    user.country = data.country
+    db.commit()
+    return {"country": user.country}
+
+
 @app.post("/api/auth")
 def auth(data: InitData, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == data.tg_id).first()
-
     if not user:
         user = User(tg_id=data.tg_id, username=data.username)
         db.add(user)
         db.commit()
         db.refresh(user)
-
     restore_energy(user, db)
     db.refresh(user)
-
     return user_to_dict(user)
 
 
@@ -177,7 +239,7 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "Нет энергии")
 
     user.energy -= 1
-    car_data = roll_car()
+    car_data = roll_car(country=user.country)
 
     xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
     add_xp(user, xp_gained)
@@ -196,18 +258,116 @@ def do_roll(tg_id: int, db: Session = Depends(get_db)):
     db.add(car)
     db.commit()
     db.refresh(user)
+    db.refresh(car)
 
     return {
-        "car": {
-            "id": car.id,
-            "brand": car.brand,
-            "model": car.model,
-            "year": car.year,
-            "color": car.color,
-            "rarity": car.rarity,
-            "condition": car.condition,
-            "price": car.price,
-        },
+        "car": car_to_dict(car),
+        "energy": user.energy,
+        "balance": user.balance,
+        "level": user.level,
+        "xp": user.xp,
+        "xp_next": xp_for_next_level(user.level),
+        "xp_gained": xp_gained,
+    }
+
+
+@app.post("/api/roll5/{tg_id}")
+def do_roll5(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    restore_energy(user, db)
+    db.refresh(user)
+
+    if user.energy < 5:
+        raise HTTPException(400, "Нужно 5 энергии")
+
+    user.energy -= 5
+    total_xp = 0
+    cars_objs = []
+
+    for _ in range(5):
+        car_data = roll_car(country=user.country)
+        xp_gained = XP_BY_RARITY.get(car_data["rarity"], 10)
+        add_xp(user, xp_gained)
+        total_xp += xp_gained
+        user.total_cars_obtained += 1
+
+        car = UserCar(
+            user_id=user.id,
+            brand=car_data["brand"],
+            model=car_data["model"],
+            year=car_data["year"],
+            color=car_data["color"],
+            rarity=car_data["rarity"],
+            condition=car_data["condition"],
+            price=car_data["price"],
+        )
+        db.add(car)
+        cars_objs.append(car)
+
+    db.commit()
+    db.refresh(user)
+    for c in cars_objs:
+        db.refresh(c)
+
+    return {
+        "cars": [car_to_dict(c) for c in cars_objs],
+        "energy": user.energy,
+        "balance": user.balance,
+        "level": user.level,
+        "xp": user.xp,
+        "xp_next": xp_for_next_level(user.level),
+        "xp_gained": total_xp,
+    }
+
+
+@app.post("/api/container/{tg_id}/{container_type}")
+def open_container(tg_id: int, container_type: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    if container_type not in CONTAINERS:
+        raise HTTPException(400, "Unknown container")
+
+    cont = CONTAINERS[container_type]
+    if user.balance < cont["price"]:
+        raise HTTPException(400, f"Нужно {cont['price']} ₽")
+
+    user.balance -= cont["price"]
+
+    rarities = list(cont["weights"].keys())
+    weights = list(cont["weights"].values())
+    rarity = random.choices(rarities, weights=weights, k=1)[0]
+
+    car_data = roll_car(country=user.country, forced_rarity=rarity)
+
+    if cont["price_mult"] != 1.0:
+        car_data["price"] = round(car_data["price"] * cont["price_mult"], 2)
+
+    xp_gained = XP_BY_RARITY.get(rarity, 10)
+    add_xp(user, xp_gained)
+    user.total_cars_obtained += 1
+
+    car = UserCar(
+        user_id=user.id,
+        brand=car_data["brand"],
+        model=car_data["model"],
+        year=car_data["year"],
+        color=car_data["color"],
+        rarity=car_data["rarity"],
+        condition=car_data["condition"],
+        price=car_data["price"],
+    )
+    db.add(car)
+    db.commit()
+    db.refresh(user)
+    db.refresh(car)
+
+    return {
+        "car": car_to_dict(car),
         "energy": user.energy,
         "balance": user.balance,
         "level": user.level,
@@ -226,21 +386,7 @@ def garage(tg_id: int, db: Session = Depends(get_db)):
     restore_energy(user, db)
     db.refresh(user)
 
-    return {
-        "cars": [
-            {
-                "id": c.id,
-                "brand": c.brand,
-                "model": c.model,
-                "year": c.year,
-                "color": c.color,
-                "rarity": c.rarity,
-                "condition": c.condition,
-                "price": c.price,
-            }
-            for c in user.cars
-        ]
-    }
+    return {"cars": [car_to_dict(c) for c in user.cars]}
 
 
 @app.post("/api/sell/{tg_id}/{car_id}")
@@ -263,8 +409,32 @@ def sell_car(tg_id: int, car_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    return {"sold_price": sell_price, "new_balance": user.balance}
+
+
+@app.post("/api/sell-all/{tg_id}")
+def sell_all(tg_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.tg_id == tg_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    cars = db.query(UserCar).filter(UserCar.user_id == user.id).all()
+    if not cars:
+        raise HTTPException(400, "Гараж пуст")
+
+    total = round(sum(c.price * 0.7 for c in cars), 2)
+    count = len(cars)
+
+    for c in cars:
+        db.delete(c)
+
+    user.balance += total
+    db.commit()
+    db.refresh(user)
+
     return {
-        "sold_price": sell_price,
+        "sold_count": count,
+        "sold_total": total,
         "new_balance": user.balance,
     }
 
@@ -282,10 +452,7 @@ def claim_bonus(tg_id: int, db: Session = Depends(get_db)):
             remaining = 24 * 3600 - delta.total_seconds()
             hours = int(remaining // 3600)
             minutes = int((remaining % 3600) // 60)
-            raise HTTPException(
-                400,
-                f"Бонус будет доступен через {hours} ч {minutes} мин"
-            )
+            raise HTTPException(400, f"Бонус будет доступен через {hours} ч {minutes} мин")
 
     bonus_money = 500
     bonus_energy = 5
