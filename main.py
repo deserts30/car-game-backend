@@ -506,7 +506,7 @@ def claim_bonus(tg_id: int, db: Session = Depends(get_db)):
     user.balance += BONUS_MONEY
     user.last_bonus = now
     db.commit(); db.refresh(user)
-    return {"bonus_money": BONUS_MONEY, "new_balance": user.balance}import os
+        return {"bonus_money": BONUS_MONEY, "new_balance": user.balance}
 import asyncio
 import random
 from contextlib import asynccontextmanager
