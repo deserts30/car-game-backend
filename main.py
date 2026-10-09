@@ -1,12 +1,61 @@
 import os
+import asyncio
+import threading
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from game_logic import roll_car
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, WebAppInfo
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-app = FastAPI()
+# ==== Telegram Bot ====
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://deserts30.github.io/-rdrop/")
 
-# Разрешаем запросы откуда угодно (нужно для Mini App)
+bot = None
+dp = None
+
+if BOT_TOKEN:
+    bot = Bot(BOT_TOKEN)
+    dp = Dispatcher()
+
+    @dp.message(F.text == "/start")
+    async def start(msg: Message):
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🎮 Играть",
+                    web_app=WebAppInfo(url=WEBAPP_URL),
+                )
+            ]]
+        )
+        await msg.answer(
+            "🚗 Добро пожаловать в <b>Выбивание машин</b>!\n\n"
+            "Выбивай тачки, собирай коллекцию!",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+
+
+def run_bot():
+    asyncio.run(dp.start_polling(bot))
+
+
+# ==== FastAPI ====
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if BOT_TOKEN:
+        thread = threading.Thread(target=run_bot, daemon=True)
+        thread.start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,7 +63,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Простое хранилище в памяти (для продакшена потом заменим на базу данных)
 users = {}
 
 
@@ -23,53 +71,36 @@ class InitData(BaseModel):
     username: str = "player"
 
 
-@app.get("/health")
-def health():
-    """Эндпоинт для UptimeRobot, чтобы сервер не засыпал."""
-    return {"status": "ok"}
-
-
 @app.get("/")
 def root():
-    return {"message": "Car Game API is running"}
+    return {"message": "Car Game API + Bot running"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.post("/api/auth")
 def auth(data: InitData):
-    """Регистрация/вход игрока."""
     if data.tg_id not in users:
-        users[data.tg_id] = {
-            "balance": 1000,
-            "energy": 10,
-            "cars": [],
-        }
+        users[data.tg_id] = {"balance": 1000, "energy": 10, "cars": []}
     return users[data.tg_id]
 
 
 @app.post("/api/roll/{tg_id}")
 def do_roll(tg_id: int):
-    """Выбить машину."""
     if tg_id not in users:
         raise HTTPException(404, "User not found")
-
     u = users[tg_id]
     if u["energy"] <= 0:
         raise HTTPException(400, "Нет энергии")
-
     u["energy"] -= 1
     car = roll_car()
     u["cars"].append(car)
-
     return {"car": car, "energy": u["energy"], "balance": u["balance"]}
 
 
 @app.get("/api/garage/{tg_id}")
 def garage(tg_id: int):
-    """Получить гараж игрока."""
     return users.get(tg_id, {"cars": []})
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
