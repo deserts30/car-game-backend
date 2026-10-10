@@ -280,35 +280,47 @@ def do_roll5(tg_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/case/{tg_id}/{case_id}")
-def open_case(tg_id: int, case_id: str, db: Session = Depends(get_db)):
+def open_case(tg_id: int, case_id: str, count: int = 1, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.tg_id == tg_id).first()
     if not user:
         raise HTTPException(404, "User not found")
     if case_id not in CASES:
         raise HTTPException(400, "Unknown case")
+    if count < 1 or count > 5:
+        raise HTTPException(400, "count от 1 до 5")
 
     c = CASES[case_id]
-    if user.balance < c["price"]:
-        raise HTTPException(400, f"Нужно {c['price']:,} ₽")
+    total_cost = c["price"] * count
+    if user.balance < total_cost:
+        raise HTTPException(400, f"Нужно {total_cost:,} ₽")
 
-    user.balance -= c["price"]
-    car_data = roll_case_car(case_id)
-    xp_g = XP_BY_RARITY.get(car_data["rarity"], 10)
-    add_xp(user, xp_g)
-    user.total_cars_obtained += 1
-    car = make_car(user, car_data)
-    db.add(car)
+    user.balance -= total_cost
+    cars_objs = []
+    total_xp = 0
+
+    for _ in range(count):
+        car_data = roll_case_car(case_id)
+        xp_g = XP_BY_RARITY.get(car_data["rarity"], 10)
+        add_xp(user, xp_g)
+        total_xp += xp_g
+        user.total_cars_obtained += 1
+        car = make_car(user, car_data)
+        db.add(car)
+        cars_objs.append(car)
+
     db.commit()
     db.refresh(user)
-    db.refresh(car)
+    for c_ in cars_objs:
+        db.refresh(c_)
 
     return {
-        "car": car_to_dict(car),
+        "cars": [car_to_dict(c_) for c_ in cars_objs],
+        "car": car_to_dict(cars_objs[0]),
         "balance": user.balance,
         "level": user.level,
         "xp": user.xp,
         "xp_next": xp_for_next_level(user.level),
-        "xp_gained": xp_g,
+        "xp_gained": total_xp,
     }
 
 
